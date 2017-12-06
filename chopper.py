@@ -120,19 +120,36 @@ def max_pool_2x2(x):
   return tf.nn.max_pool(x, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
 
 def weight_variable(shape):
-  initial = tf.truncated_normal(shape, stddev=0.1)
-  return tf.Variable(initial)
+  # initial = tf.truncated_normal(shape, stddev=0.1)
+  # USE XAVIER INITIALIZATION
+  initial = tf.contrib.layers.xavier_initializer()
+  return tf.Variable(initial(shape))
 
 def bias_variable(shape):
-  initial = tf.constant(0.1, shape=shape)
-  return tf.Variable(initial)
+  # initial = tf.constant(0.1, shape=shape)
+  # USE XAVIER INITIALIZATION
+  initial = tf.contrib.layers.xavier_initializer()
+  return tf.Variable(initial(shape))
 
-def choose_action():
+def choose_action(moveprobs):
   # Feed in probability and return an action 
   # Actions: up, down, left, right, shoot, nothing
   #           2     5     4      3      1        0
   # Fix this return after neural network is created
-  return random.randint(1,6)
+  # return random.randint(1,6)
+  # sample_uniform = np.random.uniform()
+  # Sample uniform from tensor??? Tensor is shape (-1, 6)
+  # STOCHASTIC APPROACH
+  # Psuedocode:
+  #   sample_uniform = np.random.uniform()
+  #   cumulated_sum = 0
+  #     for i in range(5)
+  #       cumulated_sum = cumulated_sum + moveprobs[current,0]
+  #       if sample_uniform < cumulated_sum:
+  #         return i
+  #     return 5
+  # This should return uniform distribution sampling of softmax probability
+  
 
 def main():
   # Prepare Chopper Command as env variable
@@ -152,7 +169,10 @@ def main():
   print("Reduced observation shape: ", reduced_observation.shape)
   float_input = reduced_observation.astype(np.float32)
   # reduced_observation.view('<f4')
+  sess = tf.InteractiveSession()
   y_conv, keep_prob = cnn_model(float_input, True)
+  moveprobs = tf.nn.softmax(y_conv)
+  sess.run(tf.global_variables_initializer())
   print("Keep_prob: ", keep_prob)
   print("Y_Conv: ", y_conv)
 
@@ -167,7 +187,7 @@ def main():
 
   #env.render allows us to render the graphics
   while True:
-    observation, reward, done, info = env.step(choose_action())
+    observation, reward, done, info = env.step(choose_action(moveprobs))
     # print(observation)
     print(reward)
     # info is an object from the dict class, holding an attribute
