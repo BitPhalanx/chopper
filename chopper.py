@@ -131,7 +131,7 @@ def bias_variable(shape):
   initial = tf.contrib.layers.xavier_initializer()
   return tf.Variable(initial(shape))
 
-def choose_action(moveprobs):
+def choose_action(moveprobs, epsilon_greedy):
   # Feed in probability and return an action 
   # Actions: up, down, left, right, shoot, nothing
   #           2     5     4      3      1        0
@@ -150,8 +150,16 @@ def choose_action(moveprobs):
   #     return 5
   # This should return uniform distribution sampling of softmax probability
   
+  if random.uniform() < epislon_greedy:
+    return random.randint(1,6)
+  else:
+    return tf.argmax(moveprobs)
 
 def main():
+  #start at 100% random
+  epsilon_greedy = 1.00
+  epsilon_decay = 0.999
+  
   # Prepare Chopper Command as env variable
   # and start access to images
   env = gym.make('ChopperCommand-v0')
@@ -187,6 +195,7 @@ def main():
 
   #env.render allows us to render the graphics
   while True:
+    epsilon_greedy *= epsilon_decay
     observation, reward, done, info = env.step(choose_action(moveprobs))
     # print(observation)
     print(reward)
