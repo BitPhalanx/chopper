@@ -10,7 +10,9 @@
 # Each action is repeatedly performed for k frames,
 # with k being uniformly sampled from {2,3,4}
 #
-# I will attempt to use a policy gradient.
+# It seems that the highest scores were made using DQN,
+# but not many used policy gradient methods. I will
+# attempt to use policy gradient.
 
 
 # Import OpenAI gym and other needed libraries
@@ -18,29 +20,46 @@ import gym
 import tensorflow as tf
 import numpy as np
 import random
+# import math
 import time
 
-# Variable to set BatchNorm to train or not
-# Set to false during verification run
-bn_is_training = True
+# def policy_gradient():
+#   with tf.variable_scope("policy"):
 
-def cnn_model():
+# def value_gradient():
+#   with tf.variable_scope("value"):
+
+def cnn_model(x, bn_is_training):
   # Batch Norm HyperParameters
+  # bn_is_training = True
   bn_scale = True
 
-  input_tensor = tf.placeholder(tf.float32)
-
+  # We will create the model for our CNN here
   # Input layer takes in 104x80x3 = 25200
   with tf.name_scope('reshape'):
-    input_reshape = tf.reshape(input_tensor, [-1, 104, 80, 3])
+    x_image = tf.reshape(x, [-1, 104, 80, 3])
+    # print(x_image)
 
   # Conv 3x3 box across 3 color channels into 32 features
   with tf.name_scope('conv1'):
     W_conv1 = weight_variable([3,3,3,32])
     b_conv1 = bias_variable([32])
-    pre_bn_conv1 = conv2d(input_reshape, W_conv1) + b_conv1
+    pre_bn_conv1 = conv2d(x_image, W_conv1) + b_conv1
     post_bn_conv1 = tf.contrib.layers.batch_norm(pre_bn_conv1, center = True, scale = bn_scale, is_training = bn_is_training, scope = 'bn1')
     h_conv1 = tf.nn.relu(post_bn_conv1)
+    # print(tf.shape(h_conv1))
+    # print(h_conv1) shows shape = (1,104,80,32)
+
+  # Not sure if doing this right, but adding a 2nd 3x3 filter...?
+  # W_conv1_2 = weight_variable([3,3,3,32])
+  # b_conv1_2 = bias_variable([32])
+  # pre_bn_conv1_2 = conv2d(x_image, W_conv1_2) + b_conv1_2
+  # post_bn_conv1_2 = tf.contrib.layers.batch_norm(pre_bn_conv1_2, center = True, scale = bn_scale, is_training = bn_is_training, scope = 'bn1_2')
+  # h_conv1_2 = tf.nn.relu(post_bn_conv1_2)
+
+  # Now, combine these two tensors? Should they be combined?
+  # Before or after maxpool?
+  # h_conv1_combined = tf.concat([h_conv1, h_conv1_2], axis_to_combine = 3)
 
   # Max pool to half size (52x40)
   with tf.name_scope('pool1'):
@@ -69,6 +88,7 @@ def cnn_model():
   # 3rd max pool, half size last time (13x10)
   with tf.name_scope('pool3'):
     h_pool3 = max_pool_2x2(h_conv3)
+    print(h_pool3)
 
   # First fully connected layer, 13*10*128 = 16640 to 512 fully connected
   with tf.name_scope('fc1'):
@@ -88,12 +108,8 @@ def cnn_model():
     b_fc2 = bias_variable([6])
 
     y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
-    moveprobs = tf.nn.softmax(y_conv)
-  
-  # Optimizer and training setup
-  # optimizer = tf.train.AdamOptimizer().minimize(loss)
 
-  return moveprobs, input_tensor, keep_prob
+  return y_conv, keep_prob
 
 def conv2d(x, W):
   # Return full stride 2d conv
@@ -104,104 +120,86 @@ def max_pool_2x2(x):
   return tf.nn.max_pool(x, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
 
 def weight_variable(shape):
+  # initial = tf.truncated_normal(shape, stddev=0.1)
+  # USE XAVIER INITIALIZATION
   initial = tf.contrib.layers.xavier_initializer()
   return tf.Variable(initial(shape))
 
 def bias_variable(shape):
+  # initial = tf.constant(0.1, shape=shape)
+  # USE XAVIER INITIALIZATION
   initial = tf.contrib.layers.xavier_initializer()
   return tf.Variable(initial(shape))
 
-def choose_action(moveprobs, epsilon_greedy):
+def choose_action(moveprobs):
   # Feed in probability and return an action 
   # Actions: up, down, left, right, shoot, nothing
   #           2     5     4      3      1        0
   # Fix this return after neural network is created
-  # print("RandInt is :{}".format(random_selection))
-  if np.random.uniform() <= epsilon_greedy:
-    random_selection = random.randint(0,5)
-    return random_selection
-  else:
-    index_of_max = moveprobs[0][0].argmax()
-    return index_of_max
+  # return random.randint(1,6)
+  # sample_uniform = np.random.uniform()
+  # Sample uniform from tensor??? Tensor is shape (-1, 6)
+  # STOCHASTIC APPROACH
+  # Psuedocode:
+  #   sample_uniform = np.random.uniform()
+  #   cumulated_sum = 0
+  #     for i in range(5)
+  #       cumulated_sum = cumulated_sum + moveprobs[current,0]
+  #       if sample_uniform < cumulated_sum:
+  #         return i
+  #     return 5
+  # This should return uniform distribution sampling of softmax probability
   
-def prep_image(observation):
-  # observation holds unsigned 8 bit int array
-  # with shape (210, 160, 3). Half this
+
+def main():
+  # Prepare Chopper Command as env variable
+  # and start access to images
+  env = gym.make('ChopperCommand-v0')
+  observation = env.reset()
+
+  # observation now holds unsigned 8 bit int array
+  # with shape (210, 160, 3). Let's half this for
+  # our neural network to allow easier processing
+  # by taking every other pixel
   reduced_observation = observation[::2, ::2, :]
   # Remove odd number from first observation
   reduced_observation = reduced_observation[1:, :, :]
   # reduced_observation is now shape (104,80,3)
+  # Confirm reduced observation shape
+  print("Reduced observation shape: ", reduced_observation.shape)
   float_input = reduced_observation.astype(np.float32)
-  return float_input
- 
-def main():
-  # Parameters
-  render_graphics = True
-  slowdown_dbg = False
-  learning_rate = 0.001
-  epsilon_greedy = 1.0
-  epsilon_decay = 0.999
-  # num_of_batches = 500
-  # episodes_per_batch = 10
-  num_of_batches = 2
-  episodes_per_batch = 2
-
-  # Start the game
-  env = gym.make('ChopperCommand-v0')
-  observation = env.reset()
-
-  # Prepare our CNN model and get first image
+  # reduced_observation.view('<f4')
   sess = tf.InteractiveSession()
-  float_input = prep_image(observation)
-  moveprobs, input_tensor, keep_prob = cnn_model()
+  y_conv, keep_prob = cnn_model(float_input, True)
+  moveprobs = tf.nn.softmax(y_conv)
   sess.run(tf.global_variables_initializer())
+  print("Keep_prob: ", keep_prob)
+  print("Y_Conv: ", y_conv)
 
-  # Prepare game management variables
+  # Choosing to keep colors since enemies have different
+  # colors. We can now feed this into our CNN.
+  # Blue planes and white helicoptors = enemies
+  # Black trucks = friendly
 
-  for batch in range(num_of_batches):
-    # Store array of moves and final score for each episode
+  # Reshape our array into 4-D tensor to allow input to NN  
+  # input_layer = tf.reshape(reduced_observation, [-1,105,80,3])
+  # print("Input Layer shape: ", input_layer.shape)
 
-    for episode in range(episodes_per_batch):
-      # Per episode game training management variables
-      episode_running = True
-      episode_reward = 0
-
-      while episode_running:
-        output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 0.5})
-        observation, reward, done, info = env.step(choose_action(output_actions, epsilon_greedy))
-        episode_reward = episode_reward + reward
-        # print(observation)
-        # info is an object from the dict class, holding an attribute
-        # called ale.lives, returns number of lives we have left
-        # print(info['ale.lives'])
-
-        # Prepare next image for input into our graph
-        float_input = prep_image(observation)
-
-        if slowdown_dbg:
-          # Slowdown to better see what's happening
-          time.sleep(0.05)
-        if render_graphics:
-          env.render()
-        if done:
-          # Then reset the environment for another batch.
-          print("  Total reward this episode: {}".format(episode_reward))
-          episode_reward = 0
-          env.reset()
-          episode_running = False
-    # Results from this batch
-    print("Batch #{} has been completed.".format(batch+1))
-    # Backpropagate here. Choose to propagate the best episode from batch
-    # Also recalculate epsilon_greedy
-    epsilon_greedy = epsilon_greedy * epsilon_decay
-    print("Reduce epsilon_greedy to {}".format(epsilon_greedy))
-
-  # Now that training batches are done, do test runs
-  print("Batches complete, now we test the NN!")
-  bn_is_training = False
-  for testcount in range(episodes_per_batch):
-    # Set batchnorm training to false
-    print("Test run #{}".format(testcount+1))
+  #env.render allows us to render the graphics
+  while True:
+    observation, reward, done, info = env.step(choose_action(moveprobs, epsilon_greedy))
+    # print(observation)
+    print(reward)
+    # info is an object from the dict class, holding an attribute
+    # called ale.lives, returns number of lives we have left
+    # print(info['ale.lives'])
+    time.sleep(0.05)
+    env.render()
+    # env.step()
+    if done:
+      # Compute weight changes and backpropagate here
+      # Then reset the environment for another run.
+      env.reset()
 
 if __name__ == "__main__":
   main()
