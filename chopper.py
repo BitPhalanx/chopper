@@ -11,6 +11,7 @@
 # with k being uniformly sampled from {2,3,4}
 #
 # I will try to fit best episode per batch
+# and do a ton of batches/episodes
 
 
 # Import OpenAI gym and other needed libraries
@@ -20,15 +21,21 @@ import numpy as np
 import random
 import time
 
-# Variable to set BatchNorm to train or not
-# Set to false during verification run
-bn_is_training = True
+# Execution parameters, we can toy with these to optimize
+bn_is_training = False # Tells batch norm if we're training or not
+lr = 1E-3
+render_graphics = True
+slowdown_dbg = False
+epsilon_greedy = 1.0
+epsilon_decay = 0.999
+num_of_batches = 500
+episodes_per_batch = 10
 
 def cnn_model():
   # Batch Norm HyperParameters
   bn_scale = True
-
   input_tensor = tf.placeholder(tf.float32)
+  train_tensor = tf.placeholder(tf.float32)
 
   # Input layer takes in 104x80x3 = 25200
   with tf.name_scope('reshape'):
@@ -90,11 +97,12 @@ def cnn_model():
     y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
     moveprobs = tf.nn.softmax(y_conv)
   
-  #TODO Optimizer and training setup
-  # loss = 
-  # train = tf.train.AdamOptimizer().minimize(loss)
+  # Optimizer and loss setup
+  # TODO check if this is set up properly
+  loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = moveprobs, labels = train_tensor))
+  optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(loss)
 
-  return moveprobs, input_tensor, keep_prob
+  return moveprobs, input_tensor, keep_prob , train_tensor #, y_conv # Might be helpful for backprop?
 
 def conv2d(x, W):
   # Return full stride 2d conv
@@ -112,11 +120,12 @@ def bias_variable(shape):
   initial = tf.contrib.layers.xavier_initializer()
   return tf.Variable(initial(shape))
 
-def choose_action(moveprobs, epsilon_greedy):
+def choose_action(moveprobs, input_epsilon_greedy):
   # Feed in probability and return an action 
   # Actions: up, down, left, right, shoot, nothing
   #           2     5     4      3      1        0
-  if np.random.uniform() <= epsilon_greedy:
+  # print(moveprobs[0][0])
+  if np.random.uniform() <= input_epsilon_greedy:
     random_selection = random.randint(0,5)
     return random_selection
   else:
@@ -134,17 +143,8 @@ def prep_image(observation):
   return float_input
  
 def main():
-  # Parameters
-  render_graphics = False
-  slowdown_dbg = False
-  learning_rate = 0.001
-  epsilon_greedy = 1.0
-  epsilon_decay = 0.999
-  # num_of_batches = 500
-  # episodes_per_batch = 10
-  num_of_batches = 3
-  episodes_per_batch = 5
-
+  # global allows us to modify epsilon_greedy
+  global epsilon_greedy, bn_is_training
   # Start the game
   env = gym.make('ChopperCommand-v0')
   observation = env.reset()
@@ -152,7 +152,7 @@ def main():
   # Prepare our CNN model and get first image
   sess = tf.InteractiveSession()
   float_input = prep_image(observation)
-  moveprobs, input_tensor, keep_prob = cnn_model()
+  moveprobs, input_tensor, keep_prob, train_tensor = cnn_model()
   sess.run(tf.global_variables_initializer())
 
   # Prepare game management variables
@@ -169,7 +169,7 @@ def main():
 
       while episode_running:
         ep_nn_input_arr.append(float_input)
-        output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 0.5})
+        output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 1.0})
         chosen_act = choose_action(output_actions, epsilon_greedy)
         ep_chosen_act_arr.append(chosen_act)
         observation, reward, done, info = env.step(chosen_act)
@@ -202,23 +202,22 @@ def main():
     frames_of_best_eps = len(chosen_act_arr[index_best_eps])
     print("Best episode was #{}.".format(index_best_eps+1))
     print("Number of frames seen this episode was {}".format(frames_of_best_eps+1))
-    # nn_input_arr[episode][step_of_turn] is numpy with shape (104,80,3)
-    # print("  Number of images seen on best episode was {}".format(len(nn_input_arr[index_best_eps])))
-    # chosen_act_arr[episode][step_of_turn] is int holding action chosen that step of turn
-    # print("  Number of actions chosen on best episode was {}".format(len(chosen_act_arr[index_best_eps])))
-    # rewards_arr is list of int holding reward for that instance of input
-    # print("  Number of individual rewards on best episode was {}".format(len(rewards_arr[index_best_eps])))
-    # total_episode_reward_arr is list of int holding cumulative score of each episode
-    # print("  Number of total episodes stored this batch is {}".format(len(total_episode_reward_arr)))
-
-    #TODO Backpropagate here. Choose to propagate the best episode from batch
-    # Perhaps instead of policy, use regression and fit input to output
-    # Using nn_input_arr[index_best_eps] list of input numpy array
-    # and chosen_act_arr[index_best_eps] list of output neurons
+    # Backpropagate here. Choose to propagate the best episode from batch
+    # Does setting bn_is_training to true really change it??? Hope so...
+    bn_is_training = True
+    # Generate one_hot for our network to train off of
+    one_hot_train = np.eye(6)[chosen_act_arr[index_best_eps]]
+    # Feed in and train #TODO check if training properly
+    # Training with 50% dropout rate in hidden fully connected layer
+    for trainloop in range(index_best_eps):
+      _ = sess.run([moveprobs], feed_dict={input_tensor: nn_input_arr[trainloop],train_tensor: one_hot_train[trainloop], keep_prob: 0.5})
 
     # Also recalculate epsilon_greedy
     epsilon_greedy = epsilon_greedy * epsilon_decay
     print("Reduce epsilon_greedy to {}".format(epsilon_greedy))
+
+    # Set batch norm to not training and generate more tests
+    bn_is_training = False
 
   # Now that training batches are done, do test runs
   print("Batches complete, now we test the NN!")
@@ -231,6 +230,7 @@ def main():
     testloop = True
     episode_reward = 0
     while testloop:
+      env.render()
       output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 1.0})
       chosen_act = choose_action(output_actions, 0.0)
       observation, reward, done, info = env.step(chosen_act)
@@ -239,8 +239,6 @@ def main():
       if done:
         testloop = False
     print("  Score: {}".format(episode_reward))
-
-
 
 if __name__ == "__main__":
   main()
