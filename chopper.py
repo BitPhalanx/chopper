@@ -10,7 +10,7 @@
 # Each action is repeatedly performed for k frames,
 # with k being uniformly sampled from {2,3,4}
 #
-# I will attempt to use a policy gradient.
+# I will try to fit best episode per batch
 
 
 # Import OpenAI gym and other needed libraries
@@ -90,8 +90,9 @@ def cnn_model():
     y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
     moveprobs = tf.nn.softmax(y_conv)
   
-  # Optimizer and training setup
-  # optimizer = tf.train.AdamOptimizer().minimize(loss)
+  #TODO Optimizer and training setup
+  # loss = 
+  # train = tf.train.AdamOptimizer().minimize(loss)
 
   return moveprobs, input_tensor, keep_prob
 
@@ -115,8 +116,6 @@ def choose_action(moveprobs, epsilon_greedy):
   # Feed in probability and return an action 
   # Actions: up, down, left, right, shoot, nothing
   #           2     5     4      3      1        0
-  # Fix this return after neural network is created
-  # print("RandInt is :{}".format(random_selection))
   if np.random.uniform() <= epsilon_greedy:
     random_selection = random.randint(0,5)
     return random_selection
@@ -136,15 +135,15 @@ def prep_image(observation):
  
 def main():
   # Parameters
-  render_graphics = True
+  render_graphics = False
   slowdown_dbg = False
   learning_rate = 0.001
   epsilon_greedy = 1.0
   epsilon_decay = 0.999
   # num_of_batches = 500
   # episodes_per_batch = 10
-  num_of_batches = 2
-  episodes_per_batch = 2
+  num_of_batches = 3
+  episodes_per_batch = 5
 
   # Start the game
   env = gym.make('ChopperCommand-v0')
@@ -160,20 +159,22 @@ def main():
 
   for batch in range(num_of_batches):
     # Store array of moves and final score for each episode
+    nn_input_arr, chosen_act_arr, rewards_arr, total_episode_reward_arr = [], [], [], []
 
     for episode in range(episodes_per_batch):
       # Per episode game training management variables
+      ep_nn_input_arr, ep_chosen_act_arr, ep_rewards_arr = [], [], []
       episode_running = True
       episode_reward = 0
 
       while episode_running:
+        ep_nn_input_arr.append(float_input)
         output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 0.5})
-        observation, reward, done, info = env.step(choose_action(output_actions, epsilon_greedy))
+        chosen_act = choose_action(output_actions, epsilon_greedy)
+        ep_chosen_act_arr.append(chosen_act)
+        observation, reward, done, info = env.step(chosen_act)
+        ep_rewards_arr.append(reward)
         episode_reward = episode_reward + reward
-        # print(observation)
-        # info is an object from the dict class, holding an attribute
-        # called ale.lives, returns number of lives we have left
-        # print(info['ale.lives'])
 
         # Prepare next image for input into our graph
         float_input = prep_image(observation)
@@ -184,24 +185,62 @@ def main():
         if render_graphics:
           env.render()
         if done:
-          # Then reset the environment for another batch.
+          # Store episode list to batch list
+          nn_input_arr.append(ep_nn_input_arr)
+          chosen_act_arr.append(ep_chosen_act_arr)
+          rewards_arr.append(ep_rewards_arr)
+          # Then reset the environment for next episode.
           print("  Total reward this episode: {}".format(episode_reward))
-          episode_reward = 0
-          env.reset()
+          total_episode_reward_arr.append(episode_reward)
+          episode_reward = 0 # Probably not needed
+          observation = env.reset()
+          float_input = prep_image(observation)
           episode_running = False
     # Results from this batch
     print("Batch #{} has been completed.".format(batch+1))
-    # Backpropagate here. Choose to propagate the best episode from batch
+    index_best_eps = total_episode_reward_arr.index(max(total_episode_reward_arr))
+    frames_of_best_eps = len(chosen_act_arr[index_best_eps])
+    print("Best episode was #{}.".format(index_best_eps+1))
+    print("Number of frames seen this episode was {}".format(frames_of_best_eps+1))
+    # nn_input_arr[episode][step_of_turn] is numpy with shape (104,80,3)
+    # print("  Number of images seen on best episode was {}".format(len(nn_input_arr[index_best_eps])))
+    # chosen_act_arr[episode][step_of_turn] is int holding action chosen that step of turn
+    # print("  Number of actions chosen on best episode was {}".format(len(chosen_act_arr[index_best_eps])))
+    # rewards_arr is list of int holding reward for that instance of input
+    # print("  Number of individual rewards on best episode was {}".format(len(rewards_arr[index_best_eps])))
+    # total_episode_reward_arr is list of int holding cumulative score of each episode
+    # print("  Number of total episodes stored this batch is {}".format(len(total_episode_reward_arr)))
+
+    #TODO Backpropagate here. Choose to propagate the best episode from batch
+    # Perhaps instead of policy, use regression and fit input to output
+    # Using nn_input_arr[index_best_eps] list of input numpy array
+    # and chosen_act_arr[index_best_eps] list of output neurons
+
     # Also recalculate epsilon_greedy
     epsilon_greedy = epsilon_greedy * epsilon_decay
     print("Reduce epsilon_greedy to {}".format(epsilon_greedy))
 
   # Now that training batches are done, do test runs
   print("Batches complete, now we test the NN!")
+  # Set batchnorm training to false
   bn_is_training = False
   for testcount in range(episodes_per_batch):
-    # Set batchnorm training to false
     print("Test run #{}".format(testcount+1))
+    observation = env.reset()
+    float_input = prep_image(observation)
+    testloop = True
+    episode_reward = 0
+    while testloop:
+      output_actions = sess.run([moveprobs], feed_dict={input_tensor: float_input, keep_prob: 1.0})
+      chosen_act = choose_action(output_actions, 0.0)
+      observation, reward, done, info = env.step(chosen_act)
+      episode_reward += reward
+      float_input = prep_image(observation)
+      if done:
+        testloop = False
+    print("  Score: {}".format(episode_reward))
+
+
 
 if __name__ == "__main__":
   main()
